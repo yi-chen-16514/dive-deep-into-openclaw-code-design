@@ -210,4 +210,22 @@ async function readConfigFileSnapshotInternal(): Promise<ReadConfigFileSnapshotI
 回到控制台上的配置流程。我们同意security warning后，在接下来的配置中大多数我们都默认即可。openclaw作为一个本地agent，可以认为他就是操作系统上的应用程序，而对应的大模型等价于操作系统，openclaw的功能依赖于后台大模型的驱动，因此在配置时必不可免的设置后台大模型，目前Openclaw支持市面上几乎所有大模型:
 <img width="1138" height="1022" alt="5c41e01d217d6708fc3570432bf41293" src="https://github.com/user-attachments/assets/b066cfb0-58fa-4478-89e2-d2335c395e1a" />
 
-我们看看用于设置大模型的对应代码，他在src/commands/auth-choice-prompt.ts
+我们看看用于设置大模型的对应代码，他在src/commands/auth-choice-prompt.ts里的promptAuthChoiceGrouped函数。这个函数有如下代码片段:
+```js
+ const providerOptions = [
+      ...availableGroups.map((group) => ({
+        value: group.value,
+        label: group.label,
+        hint: group.hint,
+      })),
+      ...(skipOption ? [skipOption] : []),
+    ];
+
+    const providerSelection = (await params.prompter.select({
+      message: "Model/auth provider",
+      options: providerOptions,
+    })) as string;
+```
+上面代码中providerOptions对应的就是控制台上显示的可选模型。这里我选了火山引擎，然后输入对应的api key,你可以从列表中选择自己喜欢的模型并提供相应的api key等信息。接下来还会让你选择channel用于连接常有的通讯软件，这样用户就可以通过通讯软件直接发送命令给电脑上的openclaw，要求它执行给定命令，这里我选飞书，然后我们需要通过飞书开放平台，使用你手机飞书扫码后登录，在开放平台选择机器人应用，这样就能在应用的“凭证与基础信息”获得app_id和app_secret，将这些信息填写到openclaw的配置中。同时配置还需要提供搜索提供商，我选择了Kimi，然后输入对应的api key.其他配置缺省或忽略即可，需要的话后面我们从代码层面进行修改。
+
+最后我们看看install-daemon这个参数，它的作用是在电脑上开启服务进程，它随时接收用户从通讯软件上发送的请求，然后在本地电脑执行对应任务。这个参数启动的就是前面我们看到的gateway后台。负责处理该命令的代码位于文件“src/commands/onboard-non-interactive/local/daemon-install.ts”，该代码文件实现主要函数installGatewayDaemonNonInteractive，在该函数里调用service.install来在当前操作系统上启动常驻进程，这个调用会判断当前使用哪种操作系统，如果是Linux，那么使用systemd 创建服务进程，如果是MacOS，则使用launchd 创建服务进程，如果是windows，那么使用Scheduled Task创建服务，对应的服务进程将在系统启动时自动启动运行，我们会在后面具体研究Openclaw的常驻进程设计。
