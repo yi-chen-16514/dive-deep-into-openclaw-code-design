@@ -48,3 +48,89 @@ server/health-state.js 负责健康状态缓存与版本管理，server/readines
 
 所以这里的设计意图是，用目录深度表达抽象层级，目录深度低的抽象层级高，深度大的则负责具体任务的执行。根目录文件，也就是src/gateway/下的文件是“启动流程的参与者”，src/gateway/server目录下的模块是“被参与者依赖的实现细节”。
 
+在server.tml.ts代码中，还需要注意的是如下接口导出:
+```js
+export type GatewayServer = {
+  close: (opts?: GatewayCloseOptions) => Promise<void>;
+};
+```
+在代码设计中以最小契约原则，也就是说gateway模块尽量少的向外导出内部的代码接口，外部模块与gatewway的沟通尽可能通过websocket/http通讯的方式。这种设计提现gateway的设计哲学，它尽可能的隐藏内部实现细节，任何互动都通过websocket/http协议进行，gateway模块与外部模块的代码层交互只有打开和关闭两个接口，这样就能隔离开gateway内部复杂的设计，避免因为和外部模块过多的在代码层互动导致资源泄露或者状态出错等问题。
+
+从代码设计上看，有一个接口定义需要注意:
+```js
+export type GatewayServerOptions = {
+  /**
+   * Bind address policy for the Gateway WebSocket/HTTP server.
+   * - loopback: 127.0.0.1
+   * - lan: 0.0.0.0
+   * - tailnet: bind only to the Tailscale IPv4 address (100.64.0.0/10)
+   * - auto: prefer loopback, else LAN
+   */
+  bind?: import("../config/config.js").GatewayBindMode;
+  /**
+   * Advanced override for the bind host, bypassing bind resolution.
+   * Prefer `bind` unless you really need a specific address.
+   */
+  host?: string;
+  /**
+   * If false, do not serve the browser Control UI.
+   * Default: config `gateway.controlUi.enabled` (or true when absent).
+   */
+  controlUiEnabled?: boolean;
+  /**
+   * If false, do not serve `POST /v1/chat/completions`.
+   * Default: config `gateway.http.endpoints.chatCompletions.enabled` (or false when absent).
+   */
+  openAiChatCompletionsEnabled?: boolean;
+  /**
+   * If false, do not serve `POST /v1/responses` (OpenResponses API).
+   * Default: config `gateway.http.endpoints.responses.enabled` (or false when absent).
+   */
+  openResponsesEnabled?: boolean;
+  /**
+   * Override gateway auth configuration (merges with config).
+   */
+  auth?: import("../config/config.js").GatewayAuthConfig;
+  /**
+   * Override gateway Tailscale exposure configuration (merges with config).
+   */
+  tailscale?: import("../config/config.js").GatewayTailscaleConfig;
+  /**
+   * Test-only: override the setup wizard runner.
+   */
+  wizardRunner?: (
+    opts: import("../commands/onboard-types.js").OnboardOptions,
+    runtime: import("../runtime.js").RuntimeEnv,
+    prompter: import("../wizard/prompts.js").WizardPrompter,
+  ) => Promise<void>;
+  /**
+   * Let post-listen sidecars (channels, plugin services) finish in the background.
+   * Defaults to false so gateway startup waits until sidecars are ready.
+   */
+  deferStartupSidecars?: boolean;
+  /**
+   * Optional startup timestamp used for concise readiness logging.
+   */
+  startupStartedAt?: number;
+  /**
+   * Config snapshot already read by the CLI gateway preflight. Passing it avoids
+   * reparsing openclaw.json during server startup.
+   */
+  startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+};
+```
+这个接口定义使用在startGatewaySwerver中作为参数传入。它的目的是将gateway的启动作为一种“可选择”模式，通过设定该对象不同字段的内容来以不同的方式启动gateway.这样通过设定该对象字段，将gateway的启动用于CLI,测试，内嵌调用等情况。这个对象的目的是“运行时覆盖层”，也就是starGatewayServer函数会优先读取openclaw.json的配置信息作为基础配置，GatewayServerOption字段的内容用于覆盖或者补充基础配置。
+
+简单的说openclaw.json适用于生产情景，GatewayServerOption适用于开发，调试场景。这样就能将“用户意图”和“程序控制”分离开.对于openclaw的操作者或者配置管理员而言，下面字段会发挥作用:
+bind: 表达网络暴露意图，也就是gateway面对本地，局域网，TailNet,
+auth,tailscale:用于安全和网络拓扑
+controlUiEnabled,openAiChatCompletionsEnabled, openResponsesEnabled表达开关意图。
+这些字段的取值以openclaw.json配置为主，如果我们在代码层面没有显示设置上面字段，那么这些字段就从Openclaw.json读取，如果手动设置了，那么就覆盖掉openclaw.json的配置。
+
+从程序控制角度看，也就是当我们要设置gateway用于开发，测试,CLI时，下面的字段需要重点设置:
+host: 绕过bind策略的精确地址覆盖
+wizardRunner:测试时替换掉交互式安装向导
+deferStartupSidecars:让sidecars在后台完成，不阻塞启动
+startupStartedAt:传入开始时间，用于日志耗时统计
+startupConfigSnapsshotRead: CLI雨度过的配置快照，避免启动时重复解析文件
+这些字段不会跟openclaw.json里面的字段重合，他们的作用就在于在代码层面给调用方提供控制点
